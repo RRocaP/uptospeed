@@ -1,27 +1,30 @@
 # syntax=docker/dockerfile:1.4
-# Example optimized Dockerfile for R and Python data science workflow
-# This uses BuildKit for optimal caching and parallel downloads
+# OPTIMIZED DOCKERFILE - Using rocker/tidyverse base and BuildKit for fast builds
+# To build: DOCKER_BUILDKIT=1 docker build -t hcc-pipeline .
 
-# Start with a rocker/tidyverse base for pre-installed R packages
+# 1. Use rocker/tidyverse as base for pre-installed R packages
 FROM rocker/tidyverse:latest
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies with apt caching
+# 2. Install system dependencies - with BuildKit caching
 RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y --no-install-recommends \
     build-essential wget curl libcurl4-openssl-dev \
-    libxml2-dev libssl-dev libfontconfig1-dev libharfbuzz-dev \
-    libfribidi-dev libfreetype6-dev libpng-dev libtiff5-dev \
-    libjpeg-dev python3-pip python3-dev && \
+    libxml2-dev libssl-dev python3-pip python3-dev && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install additional R packages with R package caching
-RUN --mount=type=cache,target=/root/.cache/R \
-    install2.r --error --skipinstalled \
-    BiocManager argparse R.utils && \
-    R -e "BiocManager::install(c('GenomicRanges', 'rtracklayer', 'Rsamtools'))"
+# 3. Install additional R packages in parallel for faster builds
+RUN R -e "options(Ncpus = parallel::detectCores()); \
+    install.packages(c('BiocManager', 'argparse', 'data.table', 'R.utils'), \
+    repos='https://packagemanager.posit.co/cran/__linux__/focal/latest', \
+    Ncpus = parallel::detectCores())"
+
+# Install Bioconductor packages with parallel processes
+RUN R -e "options(Ncpus = parallel::detectCores()); \
+    BiocManager::install(c('GenomicRanges', 'rtracklayer', 'Rsamtools'), \
+    ask=FALSE, Ncpus = parallel::detectCores())"
 
 # Install Miniconda
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
@@ -32,26 +35,25 @@ RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 ENV PATH="/opt/conda/bin:${PATH}"
 RUN conda init bash
 
-# Create Python environment - use conda-lock if possible for reproducibility
+# Create Python environment with BuildKit caching
 COPY environment.yml .
 RUN --mount=type=cache,target=/opt/conda/pkgs \
     conda env create -f environment.yml
 
-# Set environment activation in bashrc
+# Set environment activation
 RUN echo "conda activate hcc-pipeline" >> ~/.bashrc
 
 # Make RUN commands use the conda environment
 SHELL ["conda", "run", "-n", "hcc-pipeline", "/bin/bash", "-c"]
 
 # Install any additional Python packages
-RUN pip install --no-cache-dir \
-    pandas-profiling plotly_express jupyter
+RUN pip install --no-cache-dir pandas-profiling plotly_express jupyter
 
-# Copy application code
+# Copy application code (do this last to leverage caching)
 COPY . .
 
-# Set the default command to bash, or your entry script
+# Set the default command
 CMD ["/bin/bash", "-c", "source ~/.bashrc && exec bash"]
 
-# To use as an executable pipeline:
+# For pipeline execution:
 # ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "hcc-pipeline", "python", "main.py"]
