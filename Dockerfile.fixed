@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1.4
+# OPTIMIZED DOCKERFILE FOR HCC PIPELINE 
+# Base image with miniconda
+FROM continuumio/miniconda3:latest
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies with BuildKit caching
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    libcurl4-openssl-dev \
+    libxml2-dev \
+    libssl-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create conda environment
+RUN conda create -n hcc-pipeline python=3.9 r-base=4.3 -y
+
+# Add conda environment to path
+SHELL ["/bin/bash", "-c"]
+ENV PATH=/opt/conda/envs/hcc-pipeline/bin:$PATH
+ENV CONDA_DEFAULT_ENV=hcc-pipeline
+RUN echo "source activate hcc-pipeline" > ~/.bashrc
+
+# Install R packages in parallel with caching and faster mirrors
+RUN R -e "options(Ncpus = parallel::detectCores()); \
+    install.packages(c('BiocManager', 'argparse', 'data.table', 'tidyverse', 'R.utils'), \
+    repos='https://packagemanager.posit.co/cran/__linux__/focal/latest', \
+    Ncpus = parallel::detectCores())"
+
+# Install BioConductor packages with parallel processing
+RUN R -e "options(Ncpus = parallel::detectCores()); \
+    BiocManager::install(c('GenomicRanges', 'rtracklayer', 'Rsamtools'), \
+    ask=FALSE, Ncpus = parallel::detectCores())"
+
+# Copy requirements.txt and install Python packages
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# Install SplashRNA tools from GitHub
+RUN git clone https://github.com/refresh-bio/SPLASH.git /app/SPLASH \
+    && cd /app/SPLASH \
+    && pip install .
+
+# Set the working directory for the pipeline
+WORKDIR /data
+
+# Set the entrypoint to use the conda environment
+ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "hcc-pipeline"]
+
+# Default command
+CMD ["/bin/bash"]
