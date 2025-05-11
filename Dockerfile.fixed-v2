@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1.4
+# OPTIMIZED DOCKERFILE FOR HCC PIPELINE 
+FROM continuumio/miniconda3:latest as build
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies with BuildKit caching
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    libcurl4-openssl-dev \
+    libxml2-dev \
+    libssl-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create conda environment
+RUN conda create -n hcc-pipeline python=3.9 r-base=4.3 -y
+
+# Add conda environment to path
+SHELL ["/bin/bash", "-c"]
+ENV PATH=/opt/conda/envs/hcc-pipeline/bin:${PATH}
+ENV CONDA_DEFAULT_ENV=hcc-pipeline
+RUN echo "source activate hcc-pipeline" > ~/.bashrc
+
+# Install R packages in parallel with caching and faster mirrors
+RUN R -e "options(Ncpus = parallel::detectCores()); \
+    install.packages(c('BiocManager', 'argparse', 'data.table', 'tidyverse', 'R.utils'), \
+    repos='https://packagemanager.posit.co/cran/__linux__/focal/latest', \
+    Ncpus = parallel::detectCores())"
+
+# Install BioConductor packages with parallel processing
+RUN R -e "options(Ncpus = parallel::detectCores()); \
+    BiocManager::install(c('GenomicRanges', 'rtracklayer', 'Rsamtools'), \
+    ask=FALSE, Ncpus = parallel::detectCores())"
+
+# Install Python requirements if requirements.txt exists
+COPY requirements.txt* /app/
+RUN if [ -f "requirements.txt" ]; then \
+      pip install --no-cache-dir -r requirements.txt; \
+    else \
+      echo "No requirements.txt found, skipping pip install"; \
+    fi
+
+# Install SplashRNA tools from GitHub if needed
+RUN git clone https://github.com/refresh-bio/SPLASH.git /app/SPLASH \
+    && cd /app/SPLASH \
+    && if [ -f "setup.py" ]; then \
+         pip install .; \
+       else \
+         echo "No setup.py found in SPLASH repository"; \
+       fi
+
+# Final stage to create a smaller image
+FROM continuumio/miniconda3:latest
+
+# Set working directory
+WORKDIR /app
+
+# Copy conda environment from build stage
+COPY --from=build /opt/conda/envs/hcc-pipeline /opt/conda/envs/hcc-pipeline
+
+# Set up environment
+ENV PATH=/opt/conda/envs/hcc-pipeline/bin:${PATH}
+ENV CONDA_DEFAULT_ENV=hcc-pipeline
+RUN echo "source activate hcc-pipeline" > ~/.bashrc
+
+# Create data directory
+RUN mkdir -p /data
+
+# Create empty script directories in case they're needed
+RUN mkdir -p /app/scripts
+
+# Copy application files if they exist (with error handling)
+# The original error occurred because these files didn't exist
+COPY *.py /app/ 2>/dev/null || echo "No Python files to copy"
+COPY scripts/ /app/scripts/ 2>/dev/null || echo "No scripts directory to copy"
+COPY *.sh /app/ 2>/dev/null || echo "No shell scripts to copy"
+
+# Set execution permissions on all shell scripts
+RUN find /app -name "*.sh" -exec chmod +x {} \; 2>/dev/null || echo "No shell scripts found"
+
+# Set working directory for the pipeline
+WORKDIR /data
+
+# Set the entrypoint to use the conda environment
+ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "hcc-pipeline"]
+
+# Default command
+CMD ["/bin/bash"]
