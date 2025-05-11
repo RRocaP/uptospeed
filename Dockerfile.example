@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1.4
+# Example optimized Dockerfile for R and Python data science workflow
+# This uses BuildKit for optimal caching and parallel downloads
+
+# Start with a rocker/tidyverse base for pre-installed R packages
+FROM rocker/tidyverse:latest
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies with apt caching
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential wget curl libcurl4-openssl-dev \
+    libxml2-dev libssl-dev libfontconfig1-dev libharfbuzz-dev \
+    libfribidi-dev libfreetype6-dev libpng-dev libtiff5-dev \
+    libjpeg-dev python3-pip python3-dev && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install additional R packages with R package caching
+RUN --mount=type=cache,target=/root/.cache/R \
+    install2.r --error --skipinstalled \
+    BiocManager argparse R.utils && \
+    R -e "BiocManager::install(c('GenomicRanges', 'rtracklayer', 'Rsamtools'))"
+
+# Install Miniconda
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/conda && \
+    rm /tmp/miniconda.sh
+
+# Add conda to path and initialize
+ENV PATH="/opt/conda/bin:${PATH}"
+RUN conda init bash
+
+# Create Python environment - use conda-lock if possible for reproducibility
+COPY environment.yml .
+RUN --mount=type=cache,target=/opt/conda/pkgs \
+    conda env create -f environment.yml
+
+# Set environment activation in bashrc
+RUN echo "conda activate hcc-pipeline" >> ~/.bashrc
+
+# Make RUN commands use the conda environment
+SHELL ["conda", "run", "-n", "hcc-pipeline", "/bin/bash", "-c"]
+
+# Install any additional Python packages
+RUN pip install --no-cache-dir \
+    pandas-profiling plotly_express jupyter
+
+# Copy application code
+COPY . .
+
+# Set the default command to bash, or your entry script
+CMD ["/bin/bash", "-c", "source ~/.bashrc && exec bash"]
+
+# To use as an executable pipeline:
+# ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "hcc-pipeline", "python", "main.py"]
