@@ -59,14 +59,64 @@ install_system_packages() {
         sudo apt update
         sudo apt install -y build-essential wget curl git htop ncdu vim jq unzip zsh tree \
             python3-pip python3-dev libpq-dev libhdf5-dev libcurl4-openssl-dev \
-            libssl-dev libffi-dev libxml2-dev libxslt1-dev libbz2-dev liblzma-dev
+            libssl-dev libffi-dev libxml2-dev libxslt1-dev libbz2-dev liblzma-dev \
+            apt-transport-https ca-certificates gnupg-agent software-properties-common nodejs npm
+        
+        # Install Docker if not installed
+        if ! command -v docker &> /dev/null; then
+            log "Installing Docker..."
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            sudo usermod -aG docker $USER
+            success "Docker installed"
+        else
+            log "Docker already installed"
+        fi
+        
+        # Install VS Code if not installed
+        if ! command -v code &> /dev/null; then
+            log "Installing Visual Studio Code..."
+            wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
+            sudo install -o root -g root -m 644 packages.microsoft.gpg /etc/apt/trusted.gpg.d/
+            sudo sh -c 'echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/trusted.gpg.d/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list'
+            rm -f packages.microsoft.gpg
+            sudo apt update
+            sudo apt install -y code
+            success "Visual Studio Code installed"
+        else
+            log "Visual Studio Code already installed"
+        fi
+        
         success "System packages installed"
     elif [[ "$OS" == *"CentOS"* || "$OS" == *"RedHat"* || "$OS" == *"Fedora"* ]]; then
         sudo yum update -y
         sudo yum groupinstall -y "Development Tools"
         sudo yum install -y wget curl git htop ncdu vim jq unzip zsh tree \
             python3-pip python3-devel libpq-devel openssl-devel libffi-devel \
-            libxml2-devel libxslt-devel bzip2-devel xz-devel
+            libxml2-devel libxslt-devel bzip2-devel xz-devel nodejs npm
+        
+        # Install Docker if not installed
+        if ! command -v docker &> /dev/null; then
+            log "Installing Docker..."
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            sudo usermod -aG docker $USER
+            success "Docker installed"
+        else
+            log "Docker already installed"
+        fi
+        
+        # Install VS Code if not installed
+        if ! command -v code &> /dev/null; then
+            log "Installing Visual Studio Code..."
+            sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
+            sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo'
+            sudo yum install -y code
+            success "Visual Studio Code installed"
+        else
+            log "Visual Studio Code already installed"
+        fi
+        
         success "System packages installed"
     elif [[ "$OS" == "macOS" ]]; then
         # Check if Homebrew is installed
@@ -76,7 +126,26 @@ install_system_packages() {
         fi
         
         brew update
-        brew install wget curl git htop ncdu vim jq tree zsh
+        brew install wget curl git htop ncdu vim jq tree zsh nodejs npm
+        
+        # Install Docker if not installed
+        if ! command -v docker &> /dev/null; then
+            log "Installing Docker..."
+            brew install --cask docker
+            success "Docker installed"
+        else
+            log "Docker already installed"
+        fi
+        
+        # Install VS Code if not installed
+        if ! command -v code &> /dev/null; then
+            log "Installing Visual Studio Code..."
+            brew install --cask visual-studio-code
+            success "Visual Studio Code installed"
+        else
+            log "Visual Studio Code already installed"
+        fi
+        
         success "System packages installed"
     else
         warn "Unsupported OS for automatic system package installation. Please install required packages manually."
@@ -170,6 +239,110 @@ install_aria2() {
     fi
     
     success "Aria2 installed"
+}
+
+# Install Claude Code and Open Codex
+install_ai_tools() {
+    log "Installing AI coding tools..."
+    
+    # Install Claude Code
+    if ! npm list -g @anthropic-ai/claude-code &> /dev/null; then
+        log "Installing @anthropic-ai/claude-code..."
+        sudo npm install -g @anthropic-ai/claude-code
+        success "Claude Code installed"
+    else
+        log "Claude Code already installed"
+    fi
+    
+    # Install Open Codex
+    if ! npm list -g open-codex &> /dev/null; then
+        log "Installing open-codex..."
+        sudo npm install -g open-codex
+        
+        # Create Open Codex config directory and config file
+        mkdir -p $HOME/.codex
+        cat > $HOME/.codex/config.json << EOF
+{
+  "provider": "gemini",
+  "model": "gemini-2.5-pro-preview-05-06"
+}
+EOF
+        success "Open Codex installed and configured"
+    else
+        log "Open Codex already installed"
+    fi
+}
+
+# Pull Docker images
+pull_docker_images() {
+    log "Pulling useful Docker images..."
+    
+    # Check if Docker is running
+    if ! docker info &> /dev/null; then
+        warn "Docker is not running. Starting Docker service..."
+        if [[ "$OS" == *"Ubuntu"* || "$OS" == *"Debian"* ]]; then
+            sudo systemctl start docker
+        elif [[ "$OS" == *"CentOS"* || "$OS" == *"RedHat"* || "$OS" == *"Fedora"* ]]; then
+            sudo systemctl start docker
+        elif [[ "$OS" == "macOS" ]]; then
+            open -a Docker
+            # Wait for Docker to start
+            sleep 10
+        fi
+    fi
+    
+    # Pull R and tidyverse image
+    log "Pulling rocker/tidyverse image..."
+    docker pull rocker/tidyverse:latest
+    
+    # Pull Python data science image
+    log "Pulling jupyter/datascience-notebook image..."
+    docker pull jupyter/datascience-notebook:latest
+    
+    # Pull TensorFlow image
+    log "Pulling tensorflow/tensorflow image..."
+    docker pull tensorflow/tensorflow:latest-gpu-jupyter
+    
+    # Pull PyTorch image
+    log "Pulling pytorch/pytorch image..."
+    docker pull pytorch/pytorch:latest
+    
+    # Create convenient Docker run scripts
+    mkdir -p $HOME/bin
+    
+    # R Tidyverse Docker run script
+    cat > $HOME/bin/run-tidyverse << EOF
+#!/bin/bash
+docker run --rm -it -p 8787:8787 -v "\$(pwd):/home/rstudio/work" -e PASSWORD=rstudio -e ROOT=TRUE rocker/tidyverse:latest
+EOF
+    chmod +x $HOME/bin/run-tidyverse
+    
+    # Jupyter Data Science Docker run script
+    cat > $HOME/bin/run-jupyter-ds << EOF
+#!/bin/bash
+docker run --rm -it -p 8888:8888 -v "\$(pwd):/home/jovyan/work" jupyter/datascience-notebook:latest
+EOF
+    chmod +x $HOME/bin/run-jupyter-ds
+    
+    # TensorFlow GPU Docker run script
+    cat > $HOME/bin/run-tf-gpu << EOF
+#!/bin/bash
+docker run --rm -it --gpus all -p 8888:8888 -v "\$(pwd):/tf/work" tensorflow/tensorflow:latest-gpu-jupyter
+EOF
+    chmod +x $HOME/bin/run-tf-gpu
+    
+    # PyTorch Docker run script
+    cat > $HOME/bin/run-pytorch << EOF
+#!/bin/bash
+docker run --rm -it --gpus all -p 8888:8888 -v "\$(pwd):/workspace/work" -w /workspace/work pytorch/pytorch:latest python -m jupyter notebook --ip=0.0.0.0 --allow-root
+EOF
+    chmod +x $HOME/bin/run-pytorch
+    
+    # Add the bin directory to PATH in .zshrc and .bashrc
+    echo 'export PATH="$HOME/bin:$PATH"' >> $HOME/.zshrc
+    echo 'export PATH="$HOME/bin:$PATH"' >> $HOME/.bashrc
+    
+    success "Docker images pulled and scripts created"
 }
 
 # Create data science environment
@@ -342,9 +515,21 @@ alias cel='conda env list'
 alias jlab='jupyter lab'
 alias jnb='jupyter notebook'
 
+# Docker aliases
+alias d='docker'
+alias dc='docker-compose'
+alias dps='docker ps'
+alias dimg='docker images'
+alias drun='docker run --rm -it'
+alias dexec='docker exec -it'
+
 # Useful data science shortcuts
 alias nv='nvidia-smi'
 alias nv-watch='watch -n1 nvidia-smi'
+alias r-studio='run-tidyverse'
+alias ds-jupyter='run-jupyter-ds'
+alias tf-jupyter='run-tf-gpu'
+alias pt-jupyter='run-pytorch'
 
 # Directory navigation
 alias ds='cd ~/data-science'
@@ -362,6 +547,18 @@ EOF
     mkdir -p $HOME/papers
     mkdir -p $HOME/datasets
     
+    # Set up VS Code extensions
+    if command -v code &> /dev/null; then
+        log "Installing useful VS Code extensions..."
+        code --install-extension ms-python.python
+        code --install-extension ms-toolsai.jupyter
+        code --install-extension ms-azuretools.vscode-docker
+        code --install-extension redhat.vscode-yaml
+        code --install-extension REditorSupport.r
+        code --install-extension Ikuyadeu.r
+        success "VS Code extensions installed"
+    fi
+    
     success "Configurations created"
 }
 
@@ -374,12 +571,15 @@ main() {
     install_miniforge
     install_omz
     install_aria2
+    install_ai_tools
+    pull_docker_images
     create_ds_environment
     setup_cuda
     create_configs
     
     success "Setup completed! Please restart your terminal or run 'source ~/.zshrc' to apply changes."
     log "Your data science environment is ready. Activate it with 'conda activate dsenv'"
+    log "Or use the Docker aliases: r-studio, ds-jupyter, tf-jupyter, pt-jupyter"
 }
 
 # Run the main function
